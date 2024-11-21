@@ -1,4 +1,6 @@
 import sqlite3
+import argparse
+import sys
 
 def move_collection(db_path, collection_name, target_parent_name):
     """
@@ -57,10 +59,15 @@ def move_collection(db_path, collection_name, target_parent_name):
         if conn:
             conn.close()
 
+if __name__ == "__main__":
+    # Set up argument parser
+    parser = argparse.ArgumentParser(description="Move a collection to a new parent collection in the database.")
+    parser.add_argument("db_path", type=str, help="Path to the database file.")
+    parser.add_argument("collection_name", type=str, help="Name of the collection to move.")
+    parser.add_argument("target_parent_name", type=str, help="Name of the target parent collection.")
 
-# Usage example
-db_path = "your_database_file.db"  # Replace with the actual database path
-collection_name = "example_collection"
-target_parent_name = "new_parent_collection"
+    # Parse arguments
+    args = parser.parse_args()
 
-move_collection(db_path, collection_name, target_parent_name)
+    # Execute the function
+    move_collection(args.db_path, args.collection_name, args.target_parent_name)
