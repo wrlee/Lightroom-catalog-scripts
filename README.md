@@ -17,9 +17,10 @@ Before using these scripts, I recommend two things before doing anything which w
 - Add script to list and update image Library's directory path
 
 ## move_collection
+
 Moves a collection from one service to another. Lightroom does not allow you to move or copy a colletion... you have to recreate it in its new location. You can do this by exporting the definition importing it into the new location, but that is tedious.
 ```
-  move_collection {lrcat_file} {collection} {service}
+move_collection {lrcat_file} {collection} {service}
 ```
 - `lrcat_file` is the path the Lightroom Classic Catalog file
 - `collection` is the name of a collection to be moved
@@ -44,3 +45,25 @@ returns:
 - Allow re-definition of a service's default root path
 - List collections' paths
 - List service's collections and their paths, noting its default collection
+
+## library_folders
+
+List and update image Library folder locations.
+that is tedious.
+```
+library_folders {lrcat_file} [library] [new_path]
+```
+- `lrcat_file` is the path the Lightroom Classic Catalog file
+- `library` is the name of a library whose path to be updated. If `new_path` is not specified, the current value will be displayed. If not specified, all library values are displayed.
+- `new_path` is the new path to be set for the library. If not specified, current values are diplayed.
+
+options:
+- `--quiet` [`info` | `warn` | `error`] suppress output
+- `--dry-run` Run the script but don't actuallly make changes
+
+returns:
+- 0: Completed successfully
+- 1: An error occurred during processing
+
+#### To Dos
+- Allow selection of specific library when there are more than one.
