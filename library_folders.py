@@ -12,8 +12,9 @@ class Arguments:
     """
     QUIET_LEVELS = {"info": 1, "warn": 2, "error": 3}
 
-    def __init__(self, dry_run=False, quiet=None, db_path=None, library_name=None, new_path=None):
+    def __init__(self, dry_run=False, missing_only=None, quiet=None, db_path=None, library_name=None, new_path=None):
         self.dry_run = dry_run
+        self.missing_only = missing_only
         self.quiet_level = self.QUIET_LEVELS.get(quiet, 0)
         self.db_path = db_path
         self.library_name = library_name
@@ -33,12 +34,16 @@ class Arguments:
         )
         parser.add_argument("--dry-run", action="store_true", help="Show what would be changed without applying changes.")
         parser.add_argument(
+            "-m", "--missing-only", action="store_true",
+            help="List only libraries with missing paths."
+        )
+        parser.add_argument(
             "-q", "--quiet",
             choices=cls.QUIET_LEVELS.keys(),
             help="Suppress messages by level: 'info', 'warn', or 'error' (default: show all messages)."
         )
         parser.add_argument(
-            "db_path", metavar="db_path", help="Path to the SQLite database file."
+            "db_path", metavar="db_path", help="Path to the Lightroom Catalog file."
         )
         parser.add_argument(
             "library_name", metavar="library_name", nargs="?", help="Name of the library to display or update (optional)."
@@ -50,6 +55,7 @@ class Arguments:
         parsed = parser.parse_args(args)
         return cls(
             dry_run=parsed.dry_run,
+            missing_only=parsed.missing_only,
             quiet=parsed.quiet,
             db_path=parsed.db_path,
             library_name=parsed.library_name,
@@ -78,7 +84,7 @@ def manage_library_folder(db_path, library_name, new_path, arguments):
     try:
         # Check if the database file exists
         if not os.path.exists(db_path):
-            raise FileNotFoundError(f"Database file '{db_path}' does not exist.")
+            raise FileNotFoundError(f"Lightroom Catalog file '{db_path}' does not exist.")
 
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
@@ -94,8 +100,14 @@ def manage_library_folder(db_path, library_name, new_path, arguments):
 
             log_message("Libraries and their paths:", arguments, "info")
             for name, absolute_path, relative_path in libraries:
+                # Check if the directory exists
+                path_exists = os.path.exists(absolute_path)
+                if arguments.missing_only and path_exists:
+                    continue  # Skip if path exists and missing-only flag is active
+
+                missing_label = " (MISSING)" if not path_exists else ""
                 relative_path_str = f', "{relative_path}"' if relative_path else ""
-                log_message(f' - {name}: "{absolute_path}"{relative_path_str}', arguments, "info")
+                log_message(f' - {name}: "{absolute_path}"{missing_label}{relative_path_str}', arguments, "info")
             return 0
 
         # Fetch library record(s)
@@ -112,8 +124,10 @@ def manage_library_folder(db_path, library_name, new_path, arguments):
             # List all matching libraries when no new path is provided
             log_message(f"Libraries matching '{library_name}':", arguments, "info")
             for _, absolute_path, relative_path in libraries:
+                # Check if the directory exists
+                path_status = " (MISSING)" if not os.path.exists(absolute_path) else ""
                 relative_path_str = f', "{relative_path}"' if relative_path else ""
-                log_message(f' - {library_name}: "{absolute_path}"{relative_path_str}', arguments, "info")
+                log_message(f' - {library_name}: "{absolute_path}"{path_status} {relative_path_str}', arguments, "info")
             return 0
 
         if len(libraries) > 1:
@@ -123,6 +137,10 @@ def manage_library_folder(db_path, library_name, new_path, arguments):
 
         # Single library record for updating
         library_id, absolute_path, relative_path = libraries[0]
+
+        # Check if the new path exists
+        if not os.path.exists(new_path):
+            raise ValueError(f"New path '{new_path}' does not exist.")
 
         # Warn if relativePathFromCatalog is not empty
         if relative_path:
