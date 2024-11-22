@@ -10,11 +10,11 @@ class Options:
     """
     Encapsulates command-line options and provides message filtering logic.
     """
-    QUIET_LEVELS = {"none": 0, "info": 1, "warn": 2, "error": 3}
+    QUIET_LEVELS = {"info": 1, "warn": 2, "error": 3}
 
-    def __init__(self, dry_run=False, quiet="none"):
+    def __init__(self, dry_run=False, quiet=None):
         self.dry_run = dry_run
-        self.quiet_level = self.QUIET_LEVELS[quiet]
+        self.quiet_level = self.QUIET_LEVELS.get(quiet, 0)  # Default to 'none' behavior (0) if quiet is None.
 
     @classmethod
     def from_args(cls, args=None):
@@ -22,29 +22,33 @@ class Options:
         Parses command-line options and initializes an Options instance.
         """
         parser = argparse.ArgumentParser(
-            description="Collection utility to move between Publish services."
+            description="Collection utility to move between Publish services.",
+            usage="%(prog)s <db_path> <collection_name> <target_publish_service> [--dry-run] [-q | --quiet {info,warn,error}]"
         )
         parser.add_argument("--dry-run", action="store_true", help="Show what would be changed without applying changes.")
         parser.add_argument(
             "-q", "--quiet",
-            nargs="?",
-            const="info",  # Default to 'info' if no value is provided
             choices=cls.QUIET_LEVELS.keys(),
-            help="Suppress messages by level: 'info', 'warn', or 'error' (default: 'info' if no value is given)."
+            help="Suppress messages by level: 'info', 'warn', or 'error' (default: show all messages)."
         )
         parser.add_argument(
-            "positional_args",
-            nargs=argparse.REMAINDER,
-            help="Positional arguments to be passed to the script."
+            "db_path", metavar="db_path", help="Path to the SQLite database file."
         )
+        parser.add_argument(
+            "collection_name", metavar="collection_name", help="Name of the collection to be moved."
+        )
+        parser.add_argument(
+            "target_publish_service", metavar="target_publish_service", help="Name of the target Publish service."
+        )
+
         parsed = parser.parse_args(args)
-        return cls(dry_run=parsed.dry_run, quiet=parsed.quiet or "none"), parsed.positional_args
+        return cls(dry_run=parsed.dry_run, quiet=parsed.quiet), parsed
 
     def should_output(self, level):
         """
         Determines if a message of a given severity should be output based on the quiet level.
         """
-        return self.QUIET_LEVELS[level] > self.quiet_level
+        return self.QUIET_LEVELS.get(level, 0) > self.quiet_level
 
 
 def log_message(message, options, level="info"):
@@ -55,9 +59,9 @@ def log_message(message, options, level="info"):
         print(message, file=sys.stderr if level in ["warn", "error"] else sys.stdout)
 
 
-def move_collection(db_path, collection_name, target_parent_name, options):
+def move_collection(db_path, collection_name, target_publish_service, options):
     """
-    Move a collection to a new parent collection in the AgLibraryPublishedCollection database.
+    Move a collection to a new Publish service in the AgLibraryPublishedCollection database.
     """
     try:
         # Check if the database file exists
@@ -85,27 +89,27 @@ def move_collection(db_path, collection_name, target_parent_name, options):
         if is_default is not None and is_default == 1:
             raise ValueError(f"Collection '{collection_name}' is marked as a default collection.")
 
-        # Fetch target parent collection record
+        # Fetch target Publish service record
         cursor.execute(
             "SELECT id_local, genealogy FROM AgLibraryPublishedCollection WHERE name = ?",
-            (target_parent_name,)
+            (target_publish_service,)
         )
-        parents = cursor.fetchall()
+        services = cursor.fetchall()
 
-        if len(parents) != 1:
+        if len(services) != 1:
             raise ValueError(
-                f"Found {len(parents)} records for parent collection '{target_parent_name}', expected exactly 1."
+                f"Found {len(services)} records for Publish service '{target_publish_service}', expected exactly 1."
             )
 
-        parent_id, parent_genealogy = parents[0]
+        service_id, service_genealogy = services[0]
 
         # Construct new genealogy
         genealogy_parts = collection_genealogy.split('/') if collection_genealogy else []
-        new_genealogy = f"{parent_genealogy}/{genealogy_parts[-1]}" if genealogy_parts else parent_genealogy
+        new_genealogy = f"{service_genealogy}/{genealogy_parts[-1]}" if genealogy_parts else service_genealogy
 
-        log_message(f"Preparing to move collection '{collection_name}' under '{target_parent_name}'.", options, "info")
+        log_message(f"Preparing to move collection '{collection_name}' under Publish service '{target_publish_service}'.", options, "info")
         log_message(f" - Current parent: {collection_genealogy or 'None'}", options, "info")
-        log_message(f" - New parent: {parent_genealogy}", options, "info")
+        log_message(f" - New parent: {service_genealogy}", options, "info")
         log_message(f" - New genealogy: {new_genealogy}", options, "info")
 
         if options.dry_run:
@@ -118,7 +122,7 @@ def move_collection(db_path, collection_name, target_parent_name, options):
                 SET parent = ?, genealogy = ?
                 WHERE id_local = ?
                 """,
-                (parent_id, new_genealogy, collection_id)
+                (service_id, new_genealogy, collection_id)
             )
             conn.commit()
             log_message("Changes applied successfully.", options, "info")
@@ -137,24 +141,18 @@ def move_collection(db_path, collection_name, target_parent_name, options):
 
 
 def main():
-    # Parse options and remaining arguments
-    options, remaining_args = Options.from_args()
+    try:
+        # Parse options and arguments
+        options, args = Options.from_args()
 
-    if len(remaining_args) < 3:
-        print(
-            "Usage: move_collection.py <db_path> <collection_name> <target_parent_name> [--dry-run] [-q | --quiet]",
-            file=sys.stderr
-        )
+        # Call the main function
+        result = move_collection(args.db_path, args.collection_name, args.target_publish_service, options)
+        sys.exit(result)
+    except SystemExit:
+        raise  # Allow argparse to handle system exit on --help
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-
-    # Positional arguments
-    db_path = remaining_args[0]
-    collection_name = remaining_args[1]
-    target_parent_name = remaining_args[2]
-
-    # Call the main function
-    result = move_collection(db_path, collection_name, target_parent_name, options)
-    sys.exit(result)
 
 
 if __name__ == "__main__":
