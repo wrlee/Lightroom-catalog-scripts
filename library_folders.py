@@ -3,6 +3,7 @@
 import os
 import sqlite3
 import sys
+import logging
 from argparse import ArgumentParser
 from typing import Optional, List, Tuple
 
@@ -57,14 +58,15 @@ class Arguments:
         return self.args.quiet
 
 
-def log_message(message: str, args: Arguments, level: str = "info") -> None:
-    """Logs messages based on verbosity level."""
-    levels = {"info": 1, "warn": 2, "error": 3}
-    quiet_level = levels.get(args.quiet, 1)
-    message_level = levels.get(level, 1)
+def configure_logging(quiet: Optional[str]) -> None:
+    """Configures the logging module based on verbosity level."""
+    levels = {"info": logging.INFO, "warn": logging.WARNING, "error": logging.ERROR}
+    logging_level = levels.get(quiet, logging.INFO)
 
-    if message_level >= quiet_level:
-        print(message, file=sys.stderr if level == "error" else sys.stdout)
+    logging.basicConfig(
+        level=logging_level,
+        format="%(levelname)s: %(message)s"
+    )
 
 
 def validate_arguments(args: Arguments) -> None:
@@ -118,57 +120,65 @@ def manage_library_folder(args: Arguments) -> int:
             libraries = fetch_libraries(cursor, args.library_name)
 
             if not libraries:
-                raise ValueError(f"No libraries found with the name '{args.library_name}'.")
+                logging.error(f"No libraries found with the name '{args.library_name}'.")
+                return 1
 
             if args.library_name is None:
                 # List all libraries
-                log_message("Libraries and their paths:", args, "info")
+                missing_count = 0
+                logging.info("Libraries and their paths:")
                 for _, name, absolute_path, relative_path in libraries:
                     path_exists = os.path.exists(absolute_path)
                     if args.missing_only and path_exists:
                         continue
 
-                    missing_label = " (MISSING)" if not path_exists else ""
+                    prefix = "*" if not path_exists else " "
+                    if not path_exists:
+                        missing_count += 1
+
                     relative_path_str = f', "{relative_path}"' if relative_path else ""
-                    log_message(f' - {name}: "{absolute_path}"{missing_label}{relative_path_str}', args, "info")
+                    logging.info(f'{prefix}    {name}: "{absolute_path}"{relative_path_str}')
+
+                if missing_count > 0 and not args.missing_only:
+                    logging.info("\n* indicates missing directories.")
                 return 0
 
             if args.new_path is None:
                 # Display matching libraries
-                log_message(f"Libraries matching '{args.library_name}':", args, "info")
+                logging.info(f"Libraries matching '{args.library_name}':")
                 for _, name, absolute_path, relative_path in libraries:
                     path_exists = os.path.exists(absolute_path)
-                    missing_label = " (MISSING)" if not path_exists else ""
+                    prefix = "*" if not path_exists else " "
+
                     relative_path_str = f', "{relative_path}"' if relative_path else ""
-                    log_message(f' - {name}: "{absolute_path}"{missing_label}{relative_path_str}', args, "info")
+                    logging.info(f'{prefix}    {name}: "{absolute_path}"{relative_path_str}')
                 return 0
 
             if len(libraries) > 1:
-                raise ValueError(
+                logging.error(
                     f"Multiple libraries found with the name '{args.library_name}'. Update requires exactly one match."
                 )
+                return 1
 
             # Single library record for updating
             library_id, _, absolute_path, relative_path = libraries[0]
 
-            log_message(
-                f'Changing absolute path for "{args.library_name}": "{absolute_path}" -> "{args.new_path}"',
-                args,
-                "info"
+            logging.info(
+                f'Changing absolute path for "{args.library_name}": "{absolute_path}" -> "{args.new_path}"'
             )
 
             if args.dry_run:
-                log_message("Dry run: No changes made.", args, "info")
+                logging.info("Dry run: No changes made.")
             else:
                 cursor.execute(
                     "UPDATE AgLibraryRootFolder SET absolutePath = ? WHERE id_local = ?",
                     (args.new_path, library_id)
                 )
                 conn.commit()
-                log_message("Changes applied successfully.", args, "info")
+                logging.info("Changes applied successfully.")
 
     except Exception as e:
-        log_message(f"Error: {e}", args, "error")
+        logging.error(f"Error: {e}")
         return 1
 
     return 0
@@ -176,4 +186,5 @@ def manage_library_folder(args: Arguments) -> int:
 
 if __name__ == "__main__":
     args = Arguments()
+    configure_logging(args.quiet)  # Configure logging before any output
     sys.exit(manage_library_folder(args))
