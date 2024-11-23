@@ -60,8 +60,15 @@ class Arguments:
 
 def configure_logging(quiet: Optional[str]) -> None:
     """Configures the logging module based on verbosity level."""
-    levels = {"info": logging.INFO, "warn": logging.WARNING, "error": logging.ERROR}
-    logging_level = levels.get(quiet, logging.INFO)
+    # Reverse the logic: suppress higher levels of verbosity
+    levels = {
+        "info": logging.WARNING,  # Suppress INFO, show WARN and ERROR
+        "warn": logging.ERROR,    # Suppress INFO and WARN, show ERROR
+        "error": logging.CRITICAL  # Suppress all except ERROR (no messages at all)
+    }
+
+    # Default behavior (no --quiet specified) is to show everything
+    logging_level = levels.get(quiet, logging.DEBUG)
 
     logging.basicConfig(
         level=logging_level,
