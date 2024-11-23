@@ -30,6 +30,9 @@ class Arguments:
             "-q", "--quiet", nargs="?", const="info", choices=["info", "warn", "error"],
             help="Suppress messages below the specified level. Defaults to 'info'."
         )
+        parser.add_argument(
+            "-v", "--verbose", action="store_true", help="Enable verbose logging (e.g., show SQL queries)."
+        )
 
         self.args = parser.parse_args()
 
@@ -57,18 +60,22 @@ class Arguments:
     def quiet(self) -> Optional[str]:
         return self.args.quiet
 
+    @property
+    def verbose(self) -> bool:
+        return self.args.verbose
 
-def configure_logging(quiet: Optional[str]) -> None:
+
+def configure_logging(quiet: Optional[str], verbose: bool) -> None:
     """Configures the logging module based on verbosity level."""
-    # Reverse the logic: suppress higher levels of verbosity
     levels = {
         "info": logging.WARNING,  # Suppress INFO, show WARN and ERROR
         "warn": logging.ERROR,    # Suppress INFO and WARN, show ERROR
         "error": logging.CRITICAL  # Suppress all except ERROR (no messages at all)
     }
 
-    # Default behavior (no --quiet specified) is to show everything
     logging_level = levels.get(quiet, logging.DEBUG)
+    if verbose:
+        logging_level = logging.DEBUG  # Show all detailed logs if verbose is enabled
 
     logging.basicConfig(
         level=logging_level,
@@ -109,10 +116,18 @@ def fetch_libraries(cursor: sqlite3.Cursor, library_name: Optional[str] = None) 
     query = "SELECT id_local, name, absolutePath, relativePathFromCatalog FROM AgLibraryRootFolder"
     if library_name:
         query += " WHERE name = ?"
+        logging.debug(f"Executing query: {query}")
+        logging.debug(f"Parameters: {library_name}")
         cursor.execute(query, (library_name,))
     else:
+        logging.debug(f"Executing query: {query}")
         cursor.execute(query)
-    return cursor.fetchall()
+
+    rows = cursor.fetchall()
+    logging.debug(f"Query returned {len(rows)} rows.")
+    for idx, row in enumerate(rows, 1):
+        logging.debug(f"Row {idx}: {row}")
+    return rows
 
 
 def list_libraries(cursor: sqlite3.Cursor, args: Arguments) -> None:
@@ -133,6 +148,7 @@ def list_libraries(cursor: sqlite3.Cursor, args: Arguments) -> None:
     for _, name, absolute_path, relative_path in libraries:
         path_exists = os.path.exists(absolute_path)
         if args.missing_only and path_exists:
+            logging.debug(f"Skipping library '{name}' because its path exists.")
             continue
 
         prefix = "*" if not path_exists else " "
@@ -150,7 +166,9 @@ def update_library_path(cursor: sqlite3.Cursor, library_id: int, new_path: str, 
     """Updates the absolute path of a library in the catalog."""
     if args.dry_run:
         logging.info(f"Dry run: Would update library ID {library_id} to '{new_path}'.")
+        logging.debug(f"Dry run: SQL would be UPDATE AgLibraryRootFolder SET absolutePath = '{new_path}' WHERE id_local = {library_id}")
     else:
+        logging.debug(f"Executing update: UPDATE AgLibraryRootFolder SET absolutePath = '{new_path}' WHERE id_local = {library_id}")
         cursor.execute(
             "UPDATE AgLibraryRootFolder SET absolutePath = ? WHERE id_local = ?",
             (new_path, library_id)
@@ -200,5 +218,5 @@ def manage_library_folder(args: Arguments) -> int:
 
 if __name__ == "__main__":
     args = Arguments()
-    configure_logging(args.quiet)  # Configure logging before any output
+    configure_logging(args.quiet, args.verbose)  # Configure logging based on quiet and verbose
     sys.exit(manage_library_folder(args))
