@@ -48,8 +48,8 @@ returns:
 
 ## library_folders
 
-List and update image Library folder locations.
-that is tedious.
+List and update image Library folder locations. This script will list the directory settings for the image Libraries and will allow the path to be changed for any library.
+
 ```
 library_folders {lrcat_file} [library] [new_path]
 ```
