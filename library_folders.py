@@ -108,6 +108,49 @@ def fetch_libraries(cursor: sqlite3.Cursor, library_name: Optional[str] = None) 
     return cursor.fetchall()
 
 
+def list_libraries(cursor: sqlite3.Cursor, args: Arguments) -> None:
+    """Lists libraries, optionally filtering by name or missing paths.
+
+    Args:
+        cursor: SQLite cursor to execute queries.
+        args: Parsed command-line arguments.
+    """
+    libraries = fetch_libraries(cursor, args.library_name)
+    missing_count = 0
+
+    if args.library_name:
+        logging.info(f"Libraries matching '{args.library_name}':")
+    else:
+        logging.info("Libraries and their paths:")
+
+    for _, name, absolute_path, relative_path in libraries:
+        path_exists = os.path.exists(absolute_path)
+        if args.missing_only and path_exists:
+            continue
+
+        prefix = "*" if not path_exists else " "
+        if not path_exists:
+            missing_count += 1
+
+        relative_path_str = f', "{relative_path}"' if relative_path else ""
+        logging.info(f'{prefix}    {name}: "{absolute_path}"{relative_path_str}')
+
+    if missing_count > 0 and not args.missing_only:
+        logging.info("\n* indicates missing directories.")
+
+
+def update_library_path(cursor: sqlite3.Cursor, library_id: int, new_path: str, args: Arguments) -> None:
+    """Updates the absolute path of a library in the catalog."""
+    if args.dry_run:
+        logging.info(f"Dry run: Would update library ID {library_id} to '{new_path}'.")
+    else:
+        cursor.execute(
+            "UPDATE AgLibraryRootFolder SET absolutePath = ? WHERE id_local = ?",
+            (new_path, library_id)
+        )
+        logging.info("Changes applied successfully.")
+
+
 def manage_library_folder(args: Arguments) -> int:
     """Main function to handle library folder management."""
     try:
@@ -116,42 +159,17 @@ def manage_library_folder(args: Arguments) -> int:
         with sqlite3.connect(args.catalog_path) as conn:
             cursor = conn.cursor()
 
-            # Fetch libraries based on library_name argument
-            libraries = fetch_libraries(cursor, args.library_name)
+            if args.library_name is None and args.new_path is None:
+                list_libraries(cursor, args)
+                return 0
 
+            libraries = fetch_libraries(cursor, args.library_name)
             if not libraries:
                 logging.error(f"No libraries found with the name '{args.library_name}'.")
                 return 1
 
-            if args.library_name is None:
-                # List all libraries
-                missing_count = 0
-                logging.info("Libraries and their paths:")
-                for _, name, absolute_path, relative_path in libraries:
-                    path_exists = os.path.exists(absolute_path)
-                    if args.missing_only and path_exists:
-                        continue
-
-                    prefix = "*" if not path_exists else " "
-                    if not path_exists:
-                        missing_count += 1
-
-                    relative_path_str = f', "{relative_path}"' if relative_path else ""
-                    logging.info(f'{prefix}    {name}: "{absolute_path}"{relative_path_str}')
-
-                if missing_count > 0 and not args.missing_only:
-                    logging.info("\n* indicates missing directories.")
-                return 0
-
             if args.new_path is None:
-                # Display matching libraries
-                logging.info(f"Libraries matching '{args.library_name}':")
-                for _, name, absolute_path, relative_path in libraries:
-                    path_exists = os.path.exists(absolute_path)
-                    prefix = "*" if not path_exists else " "
-
-                    relative_path_str = f', "{relative_path}"' if relative_path else ""
-                    logging.info(f'{prefix}    {name}: "{absolute_path}"{relative_path_str}')
+                list_libraries(cursor, args)
                 return 0
 
             if len(libraries) > 1:
@@ -160,22 +178,11 @@ def manage_library_folder(args: Arguments) -> int:
                 )
                 return 1
 
-            # Single library record for updating
-            library_id, _, absolute_path, relative_path = libraries[0]
-
+            library_id, _, absolute_path, _ = libraries[0]
             logging.info(
                 f'Changing absolute path for "{args.library_name}": "{absolute_path}" -> "{args.new_path}"'
             )
-
-            if args.dry_run:
-                logging.info("Dry run: No changes made.")
-            else:
-                cursor.execute(
-                    "UPDATE AgLibraryRootFolder SET absolutePath = ? WHERE id_local = ?",
-                    (args.new_path, library_id)
-                )
-                conn.commit()
-                logging.info("Changes applied successfully.")
+            update_library_path(cursor, library_id, args.new_path, args)
 
     except Exception as e:
         logging.error(f"Error: {e}")
