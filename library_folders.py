@@ -9,7 +9,7 @@ from typing import Optional, List, Tuple
 
 
 class Arguments:
-    """Parses and stores command-line arguments."""
+    """Parses and stores command-line arguments for the script."""
     def __init__(self):
         parser = ArgumentParser(
             description="Utility to manage library folders in Lightroom catalogs."
@@ -125,67 +125,103 @@ def fetch_libraries(cursor: sqlite3.Cursor, library_name: Optional[str] = None) 
 
     rows = cursor.fetchall()
     logging.debug(f"Query returned {len(rows)} rows.")
-    for idx, row in enumerate(rows, 1):
-        logging.debug(f"Row {idx}: {row}")
     return rows
 
 
-def list_libraries(cursor: sqlite3.Cursor, args: Arguments) -> None:
-    """Lists libraries, optionally filtering by name or missing paths.
+def list_libraries(cursor: sqlite3.Cursor, library_name: Optional[str], missing_only: bool) -> List[Tuple[str, str, Optional[str], bool]]:
+    """Fetches and filters libraries for listing.
 
     Args:
         cursor: SQLite cursor to execute queries.
-        args: Parsed command-line arguments.
-    """
-    libraries = fetch_libraries(cursor, args.library_name)
-    missing_count = 0
+        library_name: Name of the library to filter (optional).
+        missing_only: If True, filters for libraries with missing paths.
 
-    if args.library_name:
-        logging.info(f"Libraries matching '{args.library_name}':")
+    Returns:
+        List of tuples with library data: (name, absolute_path, relative_path, path_exists).
+    """
+    libraries = fetch_libraries(cursor, library_name)
+    results = []
+    for _, name, absolute_path, relative_path in libraries:
+        path_exists = os.path.exists(absolute_path)
+        if missing_only and path_exists:
+            logging.debug(f"Skipping library '{name}' because its path exists.")
+            continue
+        results.append((name, absolute_path, relative_path, path_exists))
+    return results
+
+
+def format_library_output(libraries: List[Tuple[str, str, Optional[str], bool]]) -> List[str]:
+    """Formats library data for output.
+
+    Args:
+        libraries: List of library data tuples (name, absolute_path, relative_path, path_exists).
+
+    Returns:
+        List of formatted strings for display.
+    """
+    output = []
+    for name, absolute_path, relative_path, path_exists in libraries:
+        prefix = "*" if not path_exists else " "
+        relative_path_str = f', "{relative_path}"' if relative_path else ""
+        output.append(f'{prefix}    {name}: "{absolute_path}"{relative_path_str}')
+    return output
+
+
+def display_library_results(
+    libraries: List[Tuple[str, str, Optional[str], bool]],
+    library_name: Optional[str],
+    missing_only: bool
+) -> None:
+    """Logs library results with descriptive messaging."""
+    if library_name:
+        logging.info(f"Libraries matching '{library_name}':")
     else:
         logging.info("Libraries and their paths:")
 
-    for _, name, absolute_path, relative_path in libraries:
-        path_exists = os.path.exists(absolute_path)
-        if args.missing_only and path_exists:
-            logging.debug(f"Skipping library '{name}' because its path exists.")
-            continue
+    output = format_library_output(libraries)
+    for line in output:
+        logging.info(line)
 
-        prefix = "*" if not path_exists else " "
-        if not path_exists:
-            missing_count += 1
-
-        relative_path_str = f', "{relative_path}"' if relative_path else ""
-        logging.info(f'{prefix}    {name}: "{absolute_path}"{relative_path_str}')
-
-    if missing_count > 0 and not args.missing_only:
-        logging.info("\n* indicates missing directories.")
+    if not missing_only:
+        missing_count = sum(1 for _, _, _, exists in libraries if not exists)
+        if missing_count > 0:
+            logging.info("\n* indicates missing directories.")
 
 
-def update_library_path(cursor: sqlite3.Cursor, library_id: int, new_path: str, args: Arguments) -> None:
-    """Updates the absolute path of a library in the catalog."""
-    if args.dry_run:
-        logging.info(f"Dry run: Would update library ID {library_id} to '{new_path}'.")
-        logging.debug(f"Dry run: SQL would be UPDATE AgLibraryRootFolder SET absolutePath = '{new_path}' WHERE id_local = {library_id}")
-    else:
-        logging.debug(f"Executing update: UPDATE AgLibraryRootFolder SET absolutePath = '{new_path}' WHERE id_local = {library_id}")
-        cursor.execute(
-            "UPDATE AgLibraryRootFolder SET absolutePath = ? WHERE id_local = ?",
-            (new_path, library_id)
-        )
-        logging.info("Changes applied successfully.")
+def update_library_path(cursor: sqlite3.Cursor, library_id: int, new_path: str, dry_run: bool) -> str:
+    """Updates the absolute path of a library in the catalog.
+
+    Args:
+        cursor: SQLite cursor to execute the update.
+        library_id: ID of the library to update.
+        new_path: New absolute path for the library.
+        dry_run: If True, does not execute the update but logs the action.
+
+    Returns:
+        A message summarizing the update.
+    """
+    if dry_run:
+        logging.debug(f"Dry run: Would update library ID {library_id} to '{new_path}'.")
+        return f"Dry run: Would update library ID {library_id} to '{new_path}'."
+    cursor.execute(
+        "UPDATE AgLibraryRootFolder SET absolutePath = ? WHERE id_local = ?",
+        (new_path, library_id)
+    )
+    logging.debug(f"Executed update for library ID {library_id} to '{new_path}'.")
+    return f"Updated library ID {library_id} to '{new_path}'."
 
 
 def manage_library_folder(args: Arguments) -> int:
     """Main function to handle library folder management."""
     try:
-        validate_arguments(args)  # Validate all arguments upfront
+        validate_arguments(args)
 
         with sqlite3.connect(args.catalog_path) as conn:
             cursor = conn.cursor()
 
             if args.library_name is None and args.new_path is None:
-                list_libraries(cursor, args)
+                libraries = list_libraries(cursor, None, args.missing_only)
+                display_library_results(libraries, None, args.missing_only)
                 return 0
 
             libraries = fetch_libraries(cursor, args.library_name)
@@ -194,20 +230,18 @@ def manage_library_folder(args: Arguments) -> int:
                 return 1
 
             if args.new_path is None:
-                list_libraries(cursor, args)
+                libraries = list_libraries(cursor, args.library_name, args.missing_only)
+                display_library_results(libraries, args.library_name, args.missing_only)
                 return 0
 
             if len(libraries) > 1:
-                logging.error(
-                    f"Multiple libraries found with the name '{args.library_name}'. Update requires exactly one match."
-                )
+                logging.error(f"Multiple libraries found with the name '{args.library_name}'. Update requires exactly one match.")
                 return 1
 
             library_id, _, absolute_path, _ = libraries[0]
-            logging.info(
-                f'Changing absolute path for "{args.library_name}": "{absolute_path}" -> "{args.new_path}"'
-            )
-            update_library_path(cursor, library_id, args.new_path, args)
+            logging.info(f'Changing absolute path for "{args.library_name}": "{absolute_path}" -> "{args.new_path}"')
+            message = update_library_path(cursor, library_id, args.new_path, args.dry_run)
+            logging.info(message)
 
     except Exception as e:
         logging.error(f"Error: {e}")
@@ -218,5 +252,5 @@ def manage_library_folder(args: Arguments) -> int:
 
 if __name__ == "__main__":
     args = Arguments()
-    configure_logging(args.quiet, args.verbose)  # Configure logging based on quiet and verbose
+    configure_logging(args.quiet, args.verbose)
     sys.exit(manage_library_folder(args))
